@@ -1,0 +1,17 @@
+# Build artifacts
+*.o
+*.d
+*.su
+*.cyclo
+*.map
+*.lst
+Debug/
+Release/
+
+# IDE metadata
+.metadata/
+*.launch
+
+# STM32CubeIDE generated
+.cproject
+.project
