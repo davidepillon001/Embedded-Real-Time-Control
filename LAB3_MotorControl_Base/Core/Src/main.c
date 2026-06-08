@@ -103,27 +103,121 @@ static void MX_TIM6_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+// KEYPAD REFERENCE
+const char keypadLayout[4][4] = {
+    {'*', '0', '#', 'D'},
+    {'7', '8', '9', 'C'},
+    {'4', '5', '6', 'B'},
+    {'1', '2', '3', 'A'}};
+
+char button;
+char input_buffer[4] = {0};  // Max 3 cifre + terminatore
+uint8_t input_index = 0;
+uint8_t speed_ready = 0;
+uint32_t target_speed = 0;
+//volatile char button = 0;
+// END KEYPAD
+
 struct datalog {
 	//float w1, w2;
 	float u1, u2, u3;
+	float w1, w2, w3;
 } data;
+
+// motor 1
 float TIM3_speed;
-float reference_speed = -60.0; //RPM
+float reference_speed = 0; //RPM
 float speed_error;
 static float u_int;
 float u_p;
 float u_pi;
-float Kp = 2;
-float Ki = 2;
+float Kp = 0.5;
+float Ki = 6;
 uint32_t TIM3_CurrentCount;
 int32_t TIM3_DiffCount;
 static uint32_t TIM3_PreviousCount = 0;
 float duty;
 
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+// motor 2
+float TIM4_speed;
+float reference_speed2 = 0; //RPM
+float speed_error2;
+static float u_int2;
+float u_p2;
+float u_pi2;
+float Kp2 = 0.5;
+float Ki2 = 6;
+uint32_t TIM4_CurrentCount;
+int32_t TIM4_DiffCount;
+static uint32_t TIM4_PreviousCount = 0;
+float duty2;
+
+/*
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)            // KEYPAD REFERENCE
 {
 
+    uint8_t col;
+    uint8_t row;
+    HAL_StatusTypeDef status_col = HAL_I2C_Mem_Read(&hi2c1, SX1509_I2C_ADDR2 << 1, REG_KEY_DATA_1, 1, &col, 1, I2C_TIMEOUT); //col
+    HAL_StatusTypeDef status_row = HAL_I2C_Mem_Read(&hi2c1, SX1509_I2C_ADDR2 << 1, REG_KEY_DATA_2, 1, &row, 1, I2C_TIMEOUT); //row
 
+    printf("col = %d\n", col);
+    printf("row = %d\n", row);
+
+    int row_index = -1, col_index = -1;
+
+    // Ogni bit basso (0) rappresenta il tasto premuto
+    // 0b11111110 = 254 -> bit 0 è 0, quindi indice 0
+    // 0b11111101 = 253 -> bit 1 è 0, quindi indice 1
+    // 0b11111011 = 251 -> bit 2 è 0, quindi indice 2
+    // 0b11110111 = 247 -> bit 3 è 0, quindi indice 3
+
+    switch (row) {
+        case 254: row_index = 0; break;
+        case 253: row_index = 1; break;
+        case 251: row_index = 2; break;
+        case 247: row_index = 3; break;
+    }
+
+    switch (col) {
+        case 254: col_index = 0; break;
+        case 253: col_index = 1; break;
+        case 251: col_index = 2; break;
+        case 247: col_index = 3; break;
+    }
+
+    // EXERCISE 4.2
+
+    if (row_index != -1 && col_index != -1) {
+        button = keypadLayout[row_index][col_index];
+        printf("button = %c \n", button);
+        if (button >= '0' && button <= '9') {
+            if (input_index < 3) {
+                input_buffer[input_index++] = button;
+            }
+        } else if (button == '#') {
+            input_buffer[input_index] = '\0'; // chiusura stringa
+            target_speed = atoi((char*)input_buffer); // converte la stringa in intero
+            speed_ready = 1;
+            input_index = 0; // reset buffer
+        } else if (button < '0' && button > '9'){
+            // reset se tasto errato o A/B/C/D/*
+            input_index = 0;
+            memset((char*)input_buffer, 0, sizeof(input_buffer));
+        }
+    } else {
+        printf("Invalid key press: col = %d, row = %d\n", col, row);
+    }
+
+}
+*/
+
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    //MOTOR 1
+
+    // ENCODER CALCULATION
 	TIM3_CurrentCount = __HAL_TIM_GET_COUNTER(&htim3);
 	if(__HAL_TIM_IS_TIM_COUNTING_DOWN(&htim3))
 	{
@@ -137,14 +231,14 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		if(TIM3_CurrentCount >= TIM3_PreviousCount)
 			TIM3_DiffCount = TIM3_CurrentCount - TIM3_PreviousCount;
 		else
-			TIM3_DiffCount = ((TIM3_ARR_VALUE+1) - TIM3_CurrentCount) - TIM3_PreviousCount;
+			TIM3_DiffCount = ((TIM3_ARR_VALUE+1) - TIM3_PreviousCount) + TIM3_CurrentCount;
 	}
 
 	TIM3_PreviousCount = TIM3_CurrentCount;
-	TIM3_speed = (TIM3_DiffCount * 60) / (TIM3_ARR_VALUE * TS); // RPM
+	TIM3_speed = (TIM3_DiffCount * 60) / (TIM3_ARR_VALUE * TS); // [rpm]
 	speed_error = reference_speed - TIM3_speed;
 
-	u_int = u_int + Ki * TS * speed_error;
+	u_int += Ki * TS * speed_error;
     u_p = Kp * speed_error;
 
     u_pi = u_int + u_p;
@@ -154,7 +248,89 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 	/* Speed ctrl routine */
 	if(htim->Instance == TIM6)
 	{
+		/*  1. read the counter value from the encoder
+			2. compute the difference between the current value and the old value
+			3. compute the motor speed , in [ rpm ] for example
+			4. compute the tracking error
+			5. compute the proportional term
+			6. compute the integral term ( simplest way is to use forward Euler method )
+			 u_int = u_int + Ki * TS * speed_error
+			7. calculate the PI signal and set the pwm of the motor properly */
+		//data.w1 = TIM3_DiffCount;
+		//data.w2 = TIM3_CurrentCount;
 
+        // SEND VALUES TO STRUCTURE FOR MATLAB
+		data.u1 = TIM3_speed;        // VELOCITA
+		data.u2 = speed_error;       // ERRORE
+		data.u3 = u_pi;              // AZIONE DI CONTROLLO PI [V]
+
+		//ertc_dlog_send(&logger, &data, sizeof(data));
+		// Indicate that the program is running
+		if(++kLed >= 10)
+		{
+			kLed = 0;
+			HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
+		}
+	}
+
+	duty = u_pi * V2DUTY;    // CONVERTE L'AZIONE DI CONTROLLO IN DUTY CYCLE (duty max is 399 associato a 12[V]
+                             // oppure 8[V] con la batteria)
+	//duty = 399;            // Valore max
+	if(duty>=TIM8_ARR_VALUE)    // Limita il duty cycle, quindi la tensione (al 100%)
+	{
+		duty = TIM8_ARR_VALUE;
+	}
+
+	/* calculate duty properly */
+	if ( duty >= 0)
+	{// rotate forward
+	 /* alternate between forward and coast */
+		//__HAL_TIM_SET_COMPARE (&htim8, TIM_CHANNEL_1, (uint32_t)duty);
+		//__HAL_TIM_SET_COMPARE (&htim8, TIM_CHANNEL_2, 0);
+	 /* alternate between forward and brake , TIM8_ARR_VALUE is a define */
+		__HAL_TIM_SET_COMPARE (&htim8 , TIM_CHANNEL_1 , (uint32_t)TIM8_ARR_VALUE);
+		__HAL_TIM_SET_COMPARE (&htim8 , TIM_CHANNEL_2 , (uint32_t)(TIM8_ARR_VALUE - duty));
+
+	} else { // rotate backward
+		__HAL_TIM_SET_COMPARE (&htim8, TIM_CHANNEL_1, 0);
+		__HAL_TIM_SET_COMPARE (&htim8, TIM_CHANNEL_2, (uint32_t)-duty);
+	}
+
+
+
+	//MOTOR 2, [cambiano il timer (3->4) e i canali (1->3, 2->4)]
+
+    // ENCODER CALCULATION
+	TIM4_CurrentCount = __HAL_TIM_GET_COUNTER(&htim4);
+	if(__HAL_TIM_IS_TIM_COUNTING_DOWN(&htim4))
+	{
+		if(TIM4_CurrentCount <= TIM4_PreviousCount)
+			TIM4_DiffCount = TIM4_CurrentCount - TIM4_PreviousCount;
+		else
+			TIM4_DiffCount = -((TIM4_ARR_VALUE+1) - TIM4_CurrentCount) - TIM4_PreviousCount;
+	}
+	else
+	{
+		if(TIM4_CurrentCount >= TIM4_PreviousCount)
+			TIM4_DiffCount = TIM4_CurrentCount - TIM4_PreviousCount;
+		else
+			TIM4_DiffCount = ((TIM4_ARR_VALUE+1) - TIM4_PreviousCount) + TIM4_CurrentCount;
+	}
+
+	TIM4_PreviousCount = TIM4_CurrentCount;
+	TIM4_speed = (TIM4_DiffCount * 60) / (TIM4_ARR_VALUE * TS); // [rpm]
+	speed_error2 = reference_speed2 - TIM4_speed;
+
+	u_int2 += Ki2 * TS * speed_error2;
+    u_p2 = Kp2 * speed_error2;
+
+    u_pi2 = u_int2 + u_p2;
+
+	static int kLed2 = 0;
+
+	/* Speed ctrl routine */
+	if(htim->Instance == TIM6)
+	{
 		/*  1. read the counter value from the encoder
 			2. compute the difference between the current value and the old value
 			3. compute the motor speed , in [ rpm ] for example
@@ -164,55 +340,44 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			 u_int = u_int + Ki * TS * speed_error
 			7. calculate the PI signal and set the pwm of the motor properly */
 
-
-     	/*	Prepare data packet */
-		/*data.w1 = 10;
-		data.w2 += 1.085;
-		data.u1 = -3.14;
-		data.u2 = 0.555683;*/
-		//data.w1 = TIM3_DiffCount;
-		//data.w2 = TIM3_CurrentCount;
-		data.u1 = TIM3_speed;
-		data.u2 = speed_error;
-		data.u3 = u_pi;
-
+		// SEND TO STURCTURE FOR MATLAB
+		data.w1 = TIM4_speed;
+		data.w2 = speed_error2;
+		data.w3 = u_pi2;    // AZIONE DI CONTROLLO [V]
 
 		ertc_dlog_send(&logger, &data, sizeof(data));
-
 		// Indicate that the program is running
-		if(++kLed >= 10)
+		if(++kLed2 >= 10)
 		{
-			kLed = 0;
+			kLed2 = 0;
 			HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
 		}
 	}
 
-	duty = u_pi * V2DUTY;
+	duty2 = u_pi2 * V2DUTY;
 	//duty = 399;
-	if(duty>=TIM8_ARR_VALUE)
+	if(duty2>=TIM8_ARR_VALUE)     //LIMITA IL DUTY
 	{
-		duty = TIM8_ARR_VALUE;
+		duty2 = TIM8_ARR_VALUE;
 	}
+
 	/* calculate duty properly */
-	if ( duty >= 0)
+	if ( duty2 >= 0)
 	{// rotate forward
 	 /* alternate between forward and coast */
-		__HAL_TIM_SET_COMPARE (&htim8, TIM_CHANNEL_1, (uint32_t)duty);
-		__HAL_TIM_SET_COMPARE (&htim8, TIM_CHANNEL_2, 0);
+		//__HAL_TIM_SET_COMPARE (&htim8, TIM_CHANNEL_3, (uint32_t)duty2);
+		//__HAL_TIM_SET_COMPARE (&htim8, TIM_CHANNEL_4, 0);
 	 /* alternate between forward and brake , TIM8_ARR_VALUE is a define */
-	 /* __HAL_TIM_SET_COMPARE (& htim8 , TIM_CHANNEL_1 , ( uint32_t ) TIM8_ARR_VALUE );
-	  __HAL_TIM_SET_COMPARE (& htim8 , TIM_CHANNEL_2 , ( uint32_t )( TIM8_ARR_VALUE - duty ));
-	 */
+	    __HAL_TIM_SET_COMPARE (&htim8 , TIM_CHANNEL_3 , (uint32_t)TIM8_ARR_VALUE);
+	    __HAL_TIM_SET_COMPARE (&htim8 , TIM_CHANNEL_4 , (uint32_t)(TIM8_ARR_VALUE - duty2));
+
 	} else { // rotate backward
-		__HAL_TIM_SET_COMPARE (&htim8, TIM_CHANNEL_1, 0);
-		__HAL_TIM_SET_COMPARE (&htim8, TIM_CHANNEL_2, (uint32_t)-duty);
+		__HAL_TIM_SET_COMPARE (&htim8, TIM_CHANNEL_3, 0);
+		__HAL_TIM_SET_COMPARE (&htim8, TIM_CHANNEL_4, (uint32_t)-duty2);
 	}
 
 
 }
-
-
-
 
 /* USER CODE END 0 */
 
@@ -293,6 +458,7 @@ int main(void)
   HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_3);
   HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_4);
 
+
   /* Start speed ctrl ISR */
   HAL_TIM_Base_Start_IT(&htim6);
 
@@ -307,6 +473,22 @@ int main(void)
     /* USER CODE BEGIN 3 */
 	  ertc_dlog_update(&logger);
 
+	  // BONUS EX 1
+	      /*
+	      if (speed_ready && target_speed <= 120 ) {                            //KEYPAD (solo velocità positiva)
+	          reference_speed2 = target_speed;
+	          reference_speed = target_speed;
+	      } else {
+	          reference_speed2 = 0;
+	          reference_speed = 0;
+	      }
+	      */
+
+	 //HAL_Delay(8000);
+	 if(HAL_GetTick()> 8000){  // DELAY NON BLOCCANTE for the step response in matlab
+	   reference_speed2 = 60;
+	   reference_speed = 60;
+	 }
   }
   /* USER CODE END 3 */
 }
