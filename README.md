@@ -16,6 +16,9 @@ Reading orientation data (Euler angles and raw accelerometer) from the BNO055 IM
 Independent PI speed control of two DC motors. Wheel velocity is estimated from quadrature encoder counts read via timer (TIM3, TIM4) and converted to RPM. The PI controller computes the voltage command applied as a PWM duty cycle. Speed reference is sent from PC via UART. MATLAB scripts compare open-loop and closed-loop step responses at different reference speeds (±60 RPM) for both motors.
 
 ### LAB4 — Line following on TurtleBot (`LAB4_Line_following/`)
+
+![Line Following Demo](LAB4_Line_following/demo.gif)
+
 Two-level cascaded controller for autonomous line following on the TurtleBot platform:
 - **Outer loop (yaw-rate):** an 8-element IR sensor array (read via SX1509 over I2C) computes a lateral error `phi_err` as the weighted centroid of active sensors. A proportional controller generates a yaw-rate reference: `yaw_rate = kp * phi_err`.
 - **Inner loop (wheel speed):** the yaw-rate reference is converted to individual wheel speed references using the unicycle differential-drive model (`w_1`, `w_2`), each tracked by an independent PI controller.
